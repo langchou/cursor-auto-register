@@ -1,4 +1,3 @@
-import os
 import sys
 import psutil
 import time
@@ -6,8 +5,13 @@ import random
 from logger import info, warning, error
 import traceback
 from config import (
-    LOGIN_URL, SIGN_UP_URL, SETTINGS_URL, 
-    EMAIL_DOMAINS, REGISTRATION_MAX_RETRIES
+    LOGIN_URL,
+    SIGN_UP_URL,
+    SETTINGS_URL,
+    EMAIL_DOMAINS,
+    REGISTRATION_MAX_RETRIES,
+    EMAIL_TYPE,
+    EMAIL_CODE_TYPE
 )
 
 
@@ -26,8 +30,14 @@ TOTAL_USAGE = 0
 
 def handle_turnstile(tab):
     info("=============正在检测 Turnstile 验证=============")
+    max_count = 5
     try:
+        count = 1
         while True:
+            if count > max_count:
+                error("Turnstile 验证次数超过最大限制，退出")
+                return False
+            info(f"正在进行 Turnstile 第 {count} 次验证中...")
             try:
                 # 检查页面状态，但不直接返回，先检查是否有Turnstile验证需要处理
                 page_ready = False
@@ -54,23 +64,22 @@ def handle_turnstile(tab):
 
                     if challengeCheck:
                         info("检测到 Turnstile 验证，正在处理...")
-                        time.sleep(random.uniform(1, 3))
                         challengeCheck.click()
                         time.sleep(2)
                         info("Turnstile 验证通过")
                         return True
+                    else:
+                        info("未检测到 Turnstile 验证")
                 except:
                     pass
-                
                 # 如果页面已准备好且没有验证需要处理，则可以返回
                 if page_ready:
                     info("页面已准备好，没有检测到需要处理的验证")
                     break
-
             except:
                 pass
-
             time.sleep(random.uniform(1, 2))
+            count += 1
         return True  # 返回True表示页面已准备好
     except Exception as e:
         info(f"Turnstile 验证失败: {str(e)}")
@@ -115,7 +124,9 @@ def get_cursor_session_token(tab, max_attempts=5, retry_interval=3):
 
                 attempts += 1
                 if attempts < max_attempts:
-                    warning(f"未找到Cursor会话Token，重试中... ({attempts}/{max_attempts})")
+                    warning(
+                        f"未找到Cursor会话Token，重试中... ({attempts}/{max_attempts})"
+                    )
                     time.sleep(retry_interval)
                 else:
                     info("未找到Cursor会话Token，已达到最大尝试次数")
@@ -124,7 +135,9 @@ def get_cursor_session_token(tab, max_attempts=5, retry_interval=3):
                 info(f"获取Token出错: {str(e)}")
                 attempts += 1
                 if attempts < max_attempts:
-                    info(f"重试获取Token，等待时间: {retry_interval}秒，尝试次数: {attempts}/{max_attempts}")
+                    info(
+                        f"重试获取Token，等待时间: {retry_interval}秒，尝试次数: {attempts}/{max_attempts}"
+                    )
                     time.sleep(retry_interval)
 
         return False
@@ -133,12 +146,21 @@ def get_cursor_session_token(tab, max_attempts=5, retry_interval=3):
         warning(f"获取Token过程出错: {str(e)}")
         return False
 
+
 def sign_up_account(browser, tab, account_info):
     info("=============开始注册账号=============")
     info(
         f"账号信息: 邮箱: {account_info['email']}, 密码: {account_info['password']}, 姓名: {account_info['first_name']} {account_info['last_name']}"
     )
+    if EMAIL_TYPE == "zmail":
+        EmailVerificationHandler.create_zmail_email(account_info)
     tab.get(SIGN_UP_URL)
+
+    tab.wait(2)
+
+    if tab.ele("@name=cf-turnstile-response"):
+        error("开屏就是检测啊，大佬你的IP或UA需要换一下了啊，有问题了...要等一下")
+
     try:
         if tab.ele("@name=first_name"):
             info("=============正在填写个人信息=============")
@@ -156,7 +178,14 @@ def sign_up_account(browser, tab, account_info):
 
             info("=============提交个人信息=============")
             tab.actions.click("@type=submit")
-
+            time.sleep(random.uniform(0.2, 1))
+            if (
+                    tab.ele("verify the user is human. Please try again.")
+                    or tab.ele("Can't verify the user is human. Please try again.")
+                    or tab.ele("Can‘t verify the user is human. Please try again.")
+            ):
+                info("检测到turnstile验证失败，（IP问题、UA问题、域名问题）...正在重试...")
+                return "EMAIL_USED"
     except Exception as e:
         info(f"填写个人信息失败: {str(e)}")
         return "ERROR"
@@ -206,7 +235,9 @@ def sign_up_account(browser, tab, account_info):
             if tab.ele("@data-index=0"):
                 info("等待输入验证码...")
                 # 切换到邮箱标签页
-                code = email_handler.get_verification_code(source_email=account_info["email"])
+                code = email_handler.get_verification_code(
+                    source_email=account_info["email"]
+                )
                 if code is None:
                     info("未获取到验证码...系统异常，正在退出....")
                     return "EMAIL_GET_CODE_FAILED"
@@ -218,7 +249,7 @@ def sign_up_account(browser, tab, account_info):
                     i += 1
                 info("验证码输入完成")
                 time.sleep(random.uniform(3, 5))
-                
+
                 # 在验证码输入完成后检测是否出现了Turnstile验证
                 info("检查是否出现了Turnstile验证...")
                 try:
@@ -228,7 +259,7 @@ def sign_up_account(browser, tab, account_info):
                         handle_turnstile(tab)
                 except:
                     info("未检测到Turnstile验证，继续下一步")
-                
+
                 break
         except Exception as e:
             info(f"验证码处理失败: {str(e)}")
@@ -248,7 +279,7 @@ class EmailGenerator:
         # 将密码生成移到这里，避免类定义时执行随机密码生成
         self.default_first_name = self.generate_random_name()
         self.default_last_name = self.generate_random_name()
-        
+
         # 从配置文件获取域名配置
         self.domains = EMAIL_DOMAINS
         info(f"当前可用域名: {self.domains}")
@@ -262,18 +293,20 @@ class EmailGenerator:
         upper_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         digits = "0123456789"
         special = "!@#$%^&*"
-        
+
         # 确保密码包含至少一个大写字母、一个数字和一个特殊字符
         password = [
             random.choice(chars),
             random.choice(upper_chars),
             random.choice(digits),
-            random.choice(special)
+            random.choice(special),
         ]
-        
+
         # 添加剩余随机字符
-        password.extend(random.choices(chars + upper_chars + digits + special, k=length-4))
-        
+        password.extend(
+            random.choices(chars + upper_chars + digits + special, k=length - 4)
+        )
+
         # 打乱密码顺序
         random.shuffle(password)
         return "".join(password)
@@ -285,10 +318,12 @@ class EmailGenerator:
             random.choices("abcdefghijklmnopqrstuvwxyz", k=length - 1)
         )
         return first_letter + rest_letters
-        
+
     def generate_email(self, length=8):
         """生成随机邮箱地址，使用随机域名"""
-        random_str = "".join(random.choices("abcdefghijklmnopqrstuvwxyz1234567890", k=length))
+        random_str = "".join(
+            random.choices("abcdefghijklmnopqrstuvwxyz1234567890", k=length)
+        )
         timestamp = str(int(time.time()))[-4:]  # 使用时间戳后4位
         # 随机选择一个域名
         domain = random.choice(self.domains)
@@ -344,7 +379,7 @@ class EmailGenerator:
                             usage_limit=str(total_usage),
                             created_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
                             status="active",  # 设置默认状态为活跃
-                            id=timestamp_ms  # 设置毫秒时间戳id
+                            id=timestamp_ms,  # 设置毫秒时间戳id
                         )
                         session.add(account)
 
@@ -388,14 +423,26 @@ def main():
     current_retry = 0
 
     try:
+        email_handler = EmailVerificationHandler()
+        if email_handler.check():
+            info('邮箱服务连接正常，开始注册!')
+        else:
+            if EMAIL_CODE_TYPE == "API":
+                error('邮箱服务连接失败，并且验证码为API获取，结束注册!')
+                return
+            else:
+                info('邮箱服务连接失败，并且验证码为手动输入，等待输入验证码...')
+
         email_generator = EmailGenerator()
         browser_manager = BrowserManager()
         browser = browser_manager.init_browser()
         while current_retry < max_retries:
             try:
                 account_info = email_generator.get_account_info()
-                info(f"初始化账号信息成功 => 邮箱: {account_info['email']}, 用户名: {account_info['first_name']}, 密码: {account_info['password']}")
-                
+                info(
+                    f"初始化账号信息成功 => 邮箱: {account_info['email']}, 用户名: {account_info['first_name']}, 密码: {account_info['password']}"
+                )
+
                 signup_tab = browser.new_tab(LOGIN_URL)
                 browser.activate_tab(signup_tab)
 
@@ -412,7 +459,12 @@ def main():
                     else:
                         info("获取Cursor会话Token失败")
                         current_retry += 1
-                elif result in ["EMAIL_USED", "SIGNUP_RESTRICTED", "VERIFY_FAILED", "EMAIL_GET_CODE_FAILED"]:
+                elif result in [
+                    "EMAIL_USED",
+                    "SIGNUP_RESTRICTED",
+                    "VERIFY_FAILED",
+                    "EMAIL_GET_CODE_FAILED",
+                ]:
                     info(f"遇到问题: {result}，尝试切换邮箱...")
                     continue  # 使用新邮箱重试注册
                 else:  # ERROR

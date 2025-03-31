@@ -9,7 +9,7 @@
 
 
 ## 环境要求
-- Python 3.8+
+- Python 3.10+
 - pip (Python包管理器)
 - Docker & Docker Compose (可选，用于容器化部署)
 
@@ -121,6 +121,8 @@ curl http://localhost:8000/health
 - UI: http://localhost:8000/
 
   ![首页](./images/1.jpg)
+
+  ![配置](./images/4.jpg)
 
   ![使用](./images/2.jpg)
 
